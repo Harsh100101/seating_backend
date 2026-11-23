@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "./dist",
+    "paths": {
+      "@seating/shared": ["./src/shared/index.ts"],
+      "@seating/shared/*": ["./src/shared/*"]
+    }
+  },
+  "exclude": ["node_modules", "dist", "prisma", "test", "**/*.test.ts", "vitest.config.ts"]
+}

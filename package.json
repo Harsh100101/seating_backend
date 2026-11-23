@@ -1,0 +1,56 @@
+{
+    "name":  "seating-backend",
+    "version":  "1.0.0",
+    "private":  true,
+    "type":  "module",
+    "main":  "dist/index.js",
+    "scripts":  {
+                    "dev":  "tsx watch src/index.ts",
+                    "build":  "tsc -p tsconfig.build.json",
+                    "typecheck":  "tsc --noEmit",
+                    "start":  "node dist/index.js",
+                    "lint":  "eslint src test",
+                    "clean":  "node -e \"const fs = require(\u0027fs\u0027); if (fs.existsSync(\u0027dist\u0027)) fs.rmSync(\u0027dist\u0027, { recursive: true, force: true });\"",
+                    "test":  "vitest run",
+                    "test:auth":  "vitest run test/auth.test.ts",
+                    "test:seats":  "vitest run test/seats.test.ts",
+                    "test:hierarchy":  "vitest run test/hierarchy.test.ts",
+                    "test:reports":  "vitest run test/reports.test.ts",
+                    "test:schema":  "vitest run test/schema.test.ts",
+                    "db:validate":  "node scripts/run-prisma.mjs validate",
+                    "db:format":  "node scripts/run-prisma.mjs format",
+                    "db:format:check":  "node scripts/run-prisma.mjs format --check",
+                    "db:migrate":  "node scripts/unsupported-mongo-migrate.mjs",
+                    "db:generate":  "node scripts/run-prisma.mjs generate",
+                    "db:push":  "node scripts/run-prisma.mjs db push",
+                    "floorplans:gridfs-migrate":  "tsx scripts/migrate-floor-plans-to-gridfs.ts",
+                    "db:seed":  "tsx prisma/seed.ts",
+                    "db:studio":  "node scripts/run-prisma.mjs studio",
+                    "db:backfill-categories":  "tsx src/scripts/backfill-master-categories.ts"
+                },
+    "prisma":  {
+                   "seed":  "tsx prisma/seed.ts"
+               },
+    "dependencies":  {
+                         "fastify":  "5.12.8",
+                         "pdf-lib":  "^1.17.1",
+                         "fastify-plugin":  "^6.0.1",
+                         "dotenv":  "^16.4.7",
+                         "@fastify/cors":  "10.1.0",
+                         "zod":  "4.6.6",
+                         "@fastify/multipart":  "9.4.0",
+                         "argon2":  "^0.45.1",
+                         "mongodb":  "7.7.0",
+                         "@prisma/client":  "^5.22.0",
+                         "xlsx":  "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
+                         "@fastify/secure-session":  "8.4.2",
+                         "@fastify/cookie":  "11.1.5"
+                     },
+    "devDependencies":  {
+                            "@types/node":  "^22.10.1",
+                            "prisma":  "^5.22.0",
+                            "tsx":  "^4.19.2",
+                            "typescript":  "^5.7.3",
+                            "vitest":  "^2.1.8"
+                        }
+}

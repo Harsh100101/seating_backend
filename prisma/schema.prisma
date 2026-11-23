@@ -1,0 +1,490 @@
+// apps/backend/prisma/schema.prisma
+// Prisma Schema for Company Seating Management System (MongoDB Atlas)
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// -----------------------------------------------------------------------------
+// Enums
+// -----------------------------------------------------------------------------
+
+enum SeatType {
+  STANDARD_DESK
+  STANDING_DESK
+  CUBICLE
+  CABIN
+}
+
+enum SeatStatus {
+  AVAILABLE
+  MAINTENANCE
+  RESERVED
+}
+
+/// Physical-placement provenance is deliberately separate from employee/seat
+/// assignment. Legacy imports with generated coordinates must not be treated
+/// as architectural map placements.
+enum SeatPlacementSource {
+  MANUAL
+  IMPORT
+  LEGACY_AUTO
+}
+
+enum OperationalRecordState {
+  CURRENT
+  QUARANTINED
+  ARCHIVED
+}
+
+enum UserRole {
+  TECH_ADMIN
+  SUPER_ADMIN
+  UNIT_ADMIN
+}
+
+enum UnitLifecycleStatus {
+  ACTIVE
+  INACTIVE
+  QUARANTINED
+}
+
+enum TransferRequestStatus {
+  PENDING_TARGET_ADMIN
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+// -----------------------------------------------------------------------------
+// Models
+// -----------------------------------------------------------------------------
+
+model AdminUser {
+  id                          String                       @id @default(auto()) @map("_id") @db.ObjectId
+  email                       String                       @unique
+  passwordHash                String                       @map("password_hash")
+  name                        String
+  role                        UserRole                     @default(UNIT_ADMIN)
+  isActive                    Boolean                      @default(true) @map("is_active")
+  deletedAt                   DateTime?                    @map("deleted_at")
+  assignedUnitId              String?                      @map("assigned_unit_id") @db.ObjectId
+  departmentId                String?                      @map("department_id") @db.ObjectId
+  employeeId                  String?                      @map("employee_id") @db.ObjectId
+  createdAt                   DateTime                     @default(now()) @map("created_at")
+  updatedAt                   DateTime                     @updatedAt @map("updated_at")
+  auditLogs                   AuditLog[]
+  notifications               Notification[]
+  initialImportExtraDecisions InitialImportExtraDecision[]
+
+  @@map("admin_users")
+}
+
+model Unit {
+  id              String               @id @default(auto()) @map("_id") @db.ObjectId
+  name            String               @unique
+  code            String               @unique
+  location        String?
+  lifecycleStatus UnitLifecycleStatus? @default(ACTIVE) @map("lifecycle_status")
+  plants          Plant[]
+  buildings       Building[]
+  departments     Department[]
+  createdAt       DateTime             @default(now()) @map("created_at")
+  updatedAt       DateTime             @updatedAt @map("updated_at")
+
+  @@map("units")
+}
+
+model Plant {
+  id        String     @id @default(auto()) @map("_id") @db.ObjectId
+  name      String
+  code      String
+  unitId    String     @map("unit_id") @db.ObjectId
+  unit      Unit       @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  buildings Building[]
+  createdAt DateTime   @default(now()) @map("created_at")
+  updatedAt DateTime   @updatedAt @map("updated_at")
+
+  @@unique([unitId, code])
+  @@map("plants")
+}
+
+model Building {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  name      String
+  code      String
+  // Current operational ownership is Unit -> Building. The nullable Plant
+  // relation is retained only so historical records can continue to resolve
+  // while a populated database is backfilled without changing ObjectIds.
+  unitId    String?  @map("unit_id") @db.ObjectId
+  unit      Unit?    @relation(fields: [unitId], references: [id], onDelete: Restrict)
+  plantId   String?  @map("plant_id") @db.ObjectId
+  plant     Plant?   @relation(fields: [plantId], references: [id], onDelete: SetNull)
+  floors    Floor[]
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Mongo partial uniqueness is installed by the compatibility-index script
+  // after legacy documents have been validated/backfilled.
+  @@index([unitId, code])
+  @@index([plantId, code])
+  @@map("buildings")
+}
+
+model Floor {
+  id           String       @id @default(auto()) @map("_id") @db.ObjectId
+  name         String
+  floorNumber  Int          @map("floor_number")
+  buildingId   String       @map("building_id") @db.ObjectId
+  building     Building     @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  imageUrl     String?      @map("image_url") // Null = Blank Canvas mode
+  canvasWidth  Int          @default(1600) @map("canvas_width")
+  canvasHeight Int          @default(1000) @map("canvas_height")
+  departments  Department[]
+  seats        Seat[]
+  areas        Area[]
+  isActive     Boolean      @default(true) @map("is_active")
+  createdAt    DateTime     @default(now()) @map("created_at")
+  updatedAt    DateTime     @updatedAt @map("updated_at")
+
+  @@unique([buildingId, floorNumber])
+  @@map("floors")
+}
+
+model Department {
+  id        String     @id @default(auto()) @map("_id") @db.ObjectId
+  name      String
+  code      String
+  colorHex  String     @default("#3B82F6") @map("color_hex")
+  unitId    String?    @map("unit_id") @db.ObjectId
+  unit      Unit?      @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  floorId   String?    @map("floor_id") @db.ObjectId
+  floor     Floor?     @relation(fields: [floorId], references: [id], onDelete: SetNull)
+  managerId String?    @map("manager_id") @db.ObjectId
+  hodId     String?    @map("hod_id") @db.ObjectId
+  employees Employee[]
+  seats     Seat[]
+  sections  Section[]
+  isActive  Boolean    @default(true) @map("is_active")
+  createdAt DateTime   @default(now()) @map("created_at")
+  updatedAt DateTime   @updatedAt @map("updated_at")
+
+  @@unique([unitId, code])
+  @@unique([unitId, name])
+  @@map("departments")
+}
+
+model Employee {
+  id               String                 @id @default(auto()) @map("_id") @db.ObjectId
+  employeeCode     String                 @unique @map("employee_code")
+  fullName         String                 @map("full_name")
+  email            String?                @unique
+  designation      String?
+  grade            String?
+  phone            String?
+  ext              String?                @map("ext")
+  section          String?
+  sectionId        String?                @map("section_id") @db.ObjectId
+  sectionMaster    Section?               @relation(fields: [sectionId], references: [id], onDelete: SetNull)
+  functionName     String?                @map("function_name")
+  functionId       String?                @map("function_id") @db.ObjectId
+  functionMaster   OrgFunction?           @relation(fields: [functionId], references: [id], onDelete: SetNull)
+  reportingManager String?                @map("reporting_manager")
+  reportingTo      String?                @map("reporting_to")
+  hod              String?
+  remarks          String?
+  pcNumber         String?                @map("pc_number")
+  officeArea       String?                @map("office_area")
+  subLocation      String?                @map("sub_location")
+  departmentId     String                 @map("department_id") @db.ObjectId
+  department       Department             @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+  seat             Seat?
+  transferRequests SeatTransferRequest[]
+  isActive         Boolean                @default(true) @map("is_active")
+  // Nullable for pre-migration Mongo documents. New writes still default to
+  // CURRENT; read paths explicitly classify null/absent rows as legacy.
+  operationalState OperationalRecordState? @default(CURRENT) @map("operational_state")
+  archivedAt       DateTime?              @map("archived_at")
+  archiveReason    String?                @map("archive_reason")
+  archivedByRunId  String?                @map("archived_by_run_id") @db.ObjectId
+  createdAt        DateTime               @default(now()) @map("created_at")
+  updatedAt        DateTime               @updatedAt @map("updated_at")
+
+  @@map("employees")
+}
+
+model SeatTransferRequest {
+  id                String   @id @default(auto()) @map("_id") @db.ObjectId
+  requestNumber     String   @unique // e.g., "REQ-2026-0001"
+  employeeId        String   @db.ObjectId
+  employee          Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  // Unique while a transfer is active; cleared on every terminal state.
+  // A validated partial unique Mongo index enforces this for string values;
+  // Prisma's normal nullable @unique index rejects multiple null documents.
+  activeTransferKey String?  @map("active_transfer_key")
+
+  // Source Location (Nullable if employee currently has no seat)
+  sourceUnitId  String? @db.ObjectId
+  sourceFloorId String? @db.ObjectId
+  sourceSeatId  String? @db.ObjectId
+
+  // Requested Target Location
+  targetUnitId     String  @db.ObjectId
+  targetPlantId    String? @db.ObjectId
+  targetBuildingId String? @db.ObjectId
+  targetFloorId    String? @db.ObjectId
+  targetSeatId     String? @db.ObjectId // Optional preferred seat or assigned by Target Unit Admin
+  proofImageUrl    String?
+  proofFileName    String?
+
+  reason String
+  status TransferRequestStatus @default(PENDING_TARGET_ADMIN)
+
+  // 4-Stage Approval Trail
+  managerApproval     Json? // { approvedById, approverName, action, comment, timestamp }
+  hodApproval         Json? // { approvedById, approverName, action, comment, timestamp }
+  sourceAdminApproval Json? // { approvedById, approverName, action, comment, timestamp }
+  targetAdminApproval Json? // { approvedById, approverName, action, comment, timestamp }
+
+  rejectedByRole  String?
+  rejectionReason String?
+
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  notifications Notification[]
+
+  @@index([employeeId])
+  @@index([status])
+  @@index([activeTransferKey])
+  @@index([sourceUnitId])
+  @@index([targetUnitId])
+  @@map("seat_transfer_requests")
+}
+
+model Seat {
+  id               String                 @id @default(auto()) @map("_id") @db.ObjectId
+  label            String
+  floorId          String                 @map("floor_id") @db.ObjectId
+  floor            Floor                  @relation(fields: [floorId], references: [id], onDelete: Cascade)
+  x                Float
+  y                Float
+  placementSource  SeatPlacementSource?   @map("placement_source")
+  rotation         Float                  @default(0)
+  width            Float                  @default(64)
+  height           Float                  @default(48)
+  type             SeatType               @default(STANDARD_DESK)
+  status           SeatStatus             @default(AVAILABLE)
+  pcNumber         String?                @map("pc_number")
+  officeArea       String?                @map("office_area")
+  areaId           String?                @map("area_id") @db.ObjectId
+  area             Area?                  @relation(fields: [areaId], references: [id], onDelete: SetNull)
+  zone             String?
+  remarks          String?
+  departmentId     String?                @map("department_id") @db.ObjectId
+  department       Department?            @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  employeeId       String?                @unique @map("employee_id") @db.ObjectId // STRICT 1:1 RULE: 1 Employee = Max 1 Seat
+  employee         Employee?              @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+  operationalState OperationalRecordState? @default(CURRENT) @map("operational_state")
+  archivedAt       DateTime?              @map("archived_at")
+  archiveReason    String?                @map("archive_reason")
+  archivedByRunId  String?                @map("archived_by_run_id") @db.ObjectId
+  createdAt        DateTime               @default(now()) @map("created_at")
+  updatedAt        DateTime               @updatedAt @map("updated_at")
+
+  @@unique([floorId, label])
+  @@map("seats")
+}
+
+model Area {
+  id             String   @id @default(auto()) @map("_id") @db.ObjectId
+  name           String
+  normalizedName String   @map("normalized_name")
+  floorId        String   @map("floor_id") @db.ObjectId
+  floor          Floor    @relation(fields: [floorId], references: [id], onDelete: Cascade)
+  seats          Seat[]
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@unique([floorId, normalizedName])
+  @@map("areas")
+}
+
+model Section {
+  id             String        @id @default(auto()) @map("_id") @db.ObjectId
+  name           String
+  normalizedName String        @map("normalized_name")
+  departmentId   String        @map("department_id") @db.ObjectId
+  department     Department    @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  functions      OrgFunction[]
+  employees      Employee[]
+  isActive       Boolean       @default(true) @map("is_active")
+  createdAt      DateTime      @default(now()) @map("created_at")
+  updatedAt      DateTime      @updatedAt @map("updated_at")
+
+  @@unique([departmentId, normalizedName])
+  @@map("sections")
+}
+
+model OrgFunction {
+  id             String     @id @default(auto()) @map("_id") @db.ObjectId
+  name           String
+  normalizedName String     @map("normalized_name")
+  sectionId      String     @map("section_id") @db.ObjectId
+  section        Section    @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  employees      Employee[]
+  isActive       Boolean    @default(true) @map("is_active")
+  createdAt      DateTime   @default(now()) @map("created_at")
+  updatedAt      DateTime   @updatedAt @map("updated_at")
+
+  @@unique([sectionId, normalizedName])
+  @@map("functions")
+}
+
+model AuditLog {
+  id         String    @id @default(auto()) @map("_id") @db.ObjectId
+  adminId    String    @map("admin_id") @db.ObjectId
+  admin      AdminUser @relation(fields: [adminId], references: [id], onDelete: Restrict)
+  action     String
+  entityType String    @map("entity_type")
+  entityId   String    @map("entity_id")
+  metadata   Json
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  @@index([createdAt(sort: Desc)])
+  @@index([adminId])
+  @@index([entityType, entityId])
+  @@map("audit_logs")
+}
+
+model Notification {
+  id                String               @id @default(auto()) @map("_id") @db.ObjectId
+  recipientAdminId  String               @map("recipient_admin_id") @db.ObjectId
+  recipientAdmin    AdminUser            @relation(fields: [recipientAdminId], references: [id], onDelete: Cascade)
+  transferRequestId String?              @map("transfer_request_id") @db.ObjectId
+  transferRequest   SeatTransferRequest? @relation(fields: [transferRequestId], references: [id], onDelete: SetNull)
+  type              String
+  title             String
+  message           String
+  dedupeKey         String               @unique @map("dedupe_key")
+  readAt            DateTime?            @map("read_at")
+  createdAt         DateTime             @default(now())
+
+  @@index([recipientAdminId, createdAt])
+  @@index([transferRequestId])
+  @@map("notifications")
+}
+
+model InitialImportRun {
+  id             String    @id @default(auto()) @map("_id") @db.ObjectId
+  key            String    @unique @default("AUTHORITATIVE_WORKBOOK")
+  status         String
+  sourceFilename String?   @map("source_filename")
+  sourceHash     String?   @map("source_hash")
+  startedById    String?   @map("started_by_id") @db.ObjectId
+  startedAt      DateTime? @map("started_at")
+  completedAt    DateTime? @map("completed_at")
+  processedRows  Int       @default(0) @map("processed_rows")
+  successfulRows Int       @default(0) @map("successful_rows")
+  blockedRows    Int       @default(0) @map("blocked_rows")
+  failedRows     Int       @default(0) @map("failed_rows")
+  manifest       Json?
+  verification   Json?
+  error          Json?
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  @@index([status])
+  @@map("initial_import_runs")
+}
+
+/// Owner-approved corrections for ambiguous workbook values. The source file
+/// remains unchanged; every override is tied to its exact source hash and row.
+model InitialImportOverride {
+  id             String   @id @default(auto()) @map("_id") @db.ObjectId
+  sourceHash     String   @map("source_hash")
+  sheet          String
+  rowNumber      Int      @map("row_number")
+  field          String
+  originalValue  Json?    @map("original_value")
+  correctedValue Json     @map("corrected_value")
+  explanation    String
+  approvedById   String   @map("approved_by_id") @db.ObjectId
+  approvedAt     DateTime @default(now()) @map("approved_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@unique([sourceHash, sheet, rowNumber, field])
+  @@index([sourceHash])
+  @@map("initial_import_overrides")
+}
+
+model InitialImportExtraDecision {
+  id           String                 @id @default(auto()) @map("_id") @db.ObjectId
+  sourceHash   String                 @map("source_hash")
+  entityType   String                 @map("entity_type")
+  entityId     String                 @map("entity_id") @db.ObjectId
+  decision     OperationalRecordState
+  explanation  String
+  approvedById String                 @map("approved_by_id") @db.ObjectId
+  approvedBy   AdminUser              @relation(fields: [approvedById], references: [id], onDelete: Restrict)
+  approvedAt   DateTime               @default(now()) @map("approved_at")
+  createdAt    DateTime               @default(now()) @map("created_at")
+  updatedAt    DateTime               @updatedAt @map("updated_at")
+
+  @@unique([sourceHash, entityType, entityId])
+  @@index([sourceHash])
+  @@map("initial_import_extra_decisions")
+}
+
+enum PendingRecordStatus {
+  PENDING
+  NEEDS_MANUAL_INPUT
+  READY_TO_VALIDATE
+  RESOLVED
+  APPLIED
+  BLOCKED
+}
+
+model InitialImportPendingRecord {
+  id                 String              @id @default(auto()) @map("_id") @db.ObjectId
+  sourceHash         String              @map("source_hash")
+  excelRow           Int                 @map("excel_row")
+  employeeCode       String?             @map("employee_code")
+  employeeName       String?             @map("employee_name")
+  workstation        String?             @map("workstation")
+  problem            String              @map("problem")
+  category           String?             @map("category")
+  conflictingValue   Json?               @map("conflicting_value")
+  requiredDecision   String?             @map("required_decision")
+  unit               String?             @map("unit")
+  unitId             String?             @map("unit_id") @db.ObjectId
+  building           String?             @map("building")
+  floor              String?             @map("floor")
+  officeArea         String?             @map("office_area")
+  department         String?             @map("department")
+  section            String?             @map("section")
+  functionName       String?             @map("function_name")
+  rawRow             Json?               @map("raw_row")
+  status             PendingRecordStatus @default(PENDING)
+  resolutionDecision String?             @map("resolution_decision")
+  resolutionNotes    String?             @map("resolution_notes")
+  resolvedById       String?             @map("resolved_by_id") @db.ObjectId
+  resolvedAt         DateTime?           @map("resolved_at")
+  appliedAt          DateTime?           @map("applied_at")
+  createdAt          DateTime            @default(now()) @map("created_at")
+  updatedAt          DateTime            @updatedAt @map("updated_at")
+
+  @@index([status])
+  @@index([sourceHash])
+  @@index([problem])
+  @@index([employeeCode])
+  @@index([unit])
+  @@map("initial_import_pending_records")
+}
